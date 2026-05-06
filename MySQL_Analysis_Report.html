@@ -1,0 +1,628 @@
+
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <title>Python MySQL 數據分析報告</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 900px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f7f6;
+        }
+        .container {
+            background-color: white;
+            padding: 40px;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            border-bottom: 2px solid #3498db;
+            padding-bottom: 10px;
+            text-align: center;
+        }
+        .section {
+            margin-bottom: 30px;
+            padding: 20px;
+            border-left: 5px solid #3498db;
+            background-color: #f9f9f9;
+        }
+        .code-block {
+            background-color: #282c34;
+            color: #abb2bf;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: "Courier New", Courier, monospace;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            font-size: 14px;
+        }
+        .output-block {
+            background-color: #ffffff;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin-top: 10px;
+            border-radius: 5px;
+            font-size: 13px;
+        }
+        .status-badge {
+            display: inline-block;
+            padding: 5px 12px;
+            border-radius: 20px;
+            background-color: #27ae60;
+            color: white;
+            font-weight: bold;
+            margin-bottom: 10px;
+        }
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            margin-top: 10px;
+        }
+        th, td {
+            border: 1px solid #ddd;
+            padding: 8px;
+            text-align: left;
+        }
+        th {
+            background-color: #f2f2f2;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Python 連接 MySQL 與數據視覺化報告</h1>
+        <p style="text-align: right; color: #7f8c8d;">產生時間: 2026-05-06 02:50</p>
+        
+        <div class="section">
+            <div class="status-badge">✅ 項目完成證明</div>
+            <p>本報告展示了如何透過 Python 連接 Aiven MySQL 雲端資料庫，上傳 Excel 資料並進行自動化圖表分析。</p>
+        </div>
+<div class="section"><h3>Python 程式碼範例</h3><div class="code-block"># 1. 安裝必要的套件 (Aiven 連線必須)
+!pip install sqlalchemy pymysql pandas openpyxl
+
+import pandas as pd
+from sqlalchemy import create_engine, text, Table, Column, MetaData
+from sqlalchemy import BigInteger, String, Float, DateTime # Import common SQLAlchemy types
+import pandas.api.types as pd_types # For more robust type checking
+import io
+from google.colab import files
+
+# 2. 上傳您的 Excel 檔案
+print("請選擇您要上傳的 Excel 檔案：")
+uploaded = files.upload()
+file_name = list(uploaded.keys())[0]
+df = pd.read_excel(io.BytesIO(uploaded[file_name]))
+
+# 3. 填入您的 Aiven 連線資訊 (請根據您的截圖修改)
+USER = 'avnadmin'
+PASSWORD = 'AVNS_Ggqii1pHOaZqTR0hJjC'  # <--- 請改為您在 Aiven 看到的密碼
+HOST = 'mysql-23f76110-me-1dbd.d.aivencloud.com'
+PORT = '23367'
+DB_NAME = 'defaultdb'   # <--- 將資料庫名稱改為 'defaultdb'
+
+# 4. 建立「支援 SSL」的連線字串
+# 注意：ssl_verify_cert=False 讓我們不用下載 .pem 檔也能安全連線
+connection_uri = f"mysql+pymysql://{USER}:{PASSWORD}@{HOST}:{PORT}/{DB_NAME}?ssl_verify_cert=false&ssl_verify_identity=false"
+
+try:
+    engine = create_engine(connection_uri)
+    metadata = MetaData()
+    table_name = 'excel_upload_test'
+
+    # Add an 'id' column to the DataFrame as a regular column.
+    # This 'id' will be used for primary key and also inserted.
+    df['id'] = range(1, len(df) + 1)
+
+    # Reorder 'id' to be the first column for clarity, though not strictly necessary for to_sql
+    df = df[['id'] + [col for col in df.columns if col != 'id']]
+
+    # 5. Explicitly define table schema with primary key using SQLAlchemy Core
+    column_definitions = []
+    # Add the primary key column explicitly
+    column_definitions.append(Column('id', BigInteger, primary_key=True))
+
+    # Map other DataFrame columns to SQLAlchemy types
+    for col_name, dtype in df.dtypes.items():
+        if col_name == 'id':
+            continue # 'id' is already defined with PK
+
+        # Simple type mapping based on pandas dtypes
+        if pd_types.is_integer_dtype(dtype):
+            column_definitions.append(Column(col_name, BigInteger))
+        elif pd_types.is_float_dtype(dtype):
+            column_definitions.append(Column(col_name, Float))
+        elif pd_types.is_datetime64_any_dtype(dtype):
+            column_definitions.append(Column(col_name, DateTime))
+        else: # Catch-all for strings, objects, etc. Default to String(255)
+            # Consider using Text for potentially longer strings, or infer length dynamically
+            column_definitions.append(Column(col_name, String(255)))
+
+    # Define the table object
+    my_table = Table(table_name, metadata, *column_definitions)
+
+    # Drop existing table if it exists (to simulate 'if_exists='replace' behavior)
+    with engine.connect() as connection:
+        if engine.dialect.has_table(connection, table_name):
+            print(f"Dropping existing table '{table_name}'...")
+            my_table.drop(connection)
+            print(f"Table '{table_name}' dropped.")
+
+        # Create the table in the database
+        print(f"Creating table '{table_name}' with primary key...")
+        my_table.create(connection)
+        print(f"Table '{table_name}' created successfully.")
+
+    # 6. Insert data into the pre-created table
+    # Use if_exists='append' and index=False as the table structure with PK is already defined
+    print(f"Uploading data to table '{table_name}'...")
+    df.to_sql(table_name, con=engine, if_exists='append', index=False)
+    print(f"Data uploaded successfully.")
+
+    print("-" * 30)
+    print(f"✅ 上傳成功！")
+    print(f"資料已存入資料庫：{DB_NAME}")
+    print(f"資料表名稱為：{table_name}")
+
+    # 7. 立即測試讀取前 5 筆資料
+    print("\n以下是資料庫內的前 5 筆資料預覽：")
+    check_df = pd.read_sql(f"SELECT * FROM {table_name} LIMIT 5", engine)
+    print(check_df)
+
+except Exception as e:
+    print("-" * 30)
+    print(f"❌ 發生錯誤，請檢查資訊是否正確：\n{e}")</div><div class="output-block"><h4>執行結果/輸出預覽</h4><p>Requirement already satisfied: sqlalchemy in /usr/local/lib/python3.12/dist-packages (2.0.49)<br>Requirement already satisfied: pymysql in /usr/local/lib/python3.12/dist-packages (1.1.3)<br>Requirement already satisfied: pandas in /usr/local/lib/python3.12/dist-packages (2.2.2)<br>Requirement already satisfied: openpyxl in /usr/local/lib/python3.12/dist-packages (3.1.5)<br>Requirement already satisfied: greenlet>=1 in /usr/local/lib/python3.12/dist-packages (from sqlalchemy) (3.4.0)<br>Requirement already satisfied: typing-extensions>=4.6.0 in /usr/local/lib/python3.12/dist-packages (from sqlalchemy) (4.15.0)<br>Requirement already satisfied: numpy>=1.26.0 in /usr/local/lib/python3.12/dist-packages (from pandas) (2.0.2)<br>Requirement already satisfied: python-dateutil>=2.8.2 in /usr/local/lib/python3.12/dist-packages (from pandas) (2.9.0.post0)<br>Requirement already satisfied: pytz>=2020.1 in /usr/local/lib/python3.12/dist-packages (from pandas) (2025.2)<br>Requirement already satisfied: tzdata>=2022.7 in /usr/local/lib/python3.12/dist-packages (from pandas) (2026.1)<br>Requirement already satisfied: et-xmlfile in /usr/local/lib/python3.12/dist-packages (from openpyxl) (2.0.0)<br>Requirement already satisfied: six>=1.5 in /usr/local/lib/python3.12/dist-packages (from python-dateutil>=2.8.2->pandas) (1.17.0)<br>請選擇您要上傳的 Excel 檔案：<br></p>
+     <input type="file" id="files-74709395-df55-4bf6-909b-cf2b347b21b9" name="files[]" multiple disabled
+        style="border:none" />
+     <output id="result-74709395-df55-4bf6-909b-cf2b347b21b9">
+      Upload widget is only available when the cell has been executed in the
+      current browser session. Please rerun this cell to enable.
+      </output>
+      <script>// Copyright 2017 Google LLC
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//      http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+/**
+ * @fileoverview Helpers for google.colab Python module.
+ */
+(function(scope) {
+function span(text, styleAttributes = {}) {
+  const element = document.createElement('span');
+  element.textContent = text;
+  for (const key of Object.keys(styleAttributes)) {
+    element.style[key] = styleAttributes[key];
+  }
+  return element;
+}
+
+// Max number of bytes which will be uploaded at a time.
+const MAX_PAYLOAD_SIZE = 100 * 1024;
+
+function _uploadFiles(inputId, outputId) {
+  const steps = uploadFilesStep(inputId, outputId);
+  const outputElement = document.getElementById(outputId);
+  // Cache steps on the outputElement to make it available for the next call
+  // to uploadFilesContinue from Python.
+  outputElement.steps = steps;
+
+  return _uploadFilesContinue(outputId);
+}
+
+// This is roughly an async generator (not supported in the browser yet),
+// where there are multiple asynchronous steps and the Python side is going
+// to poll for completion of each step.
+// This uses a Promise to block the python side on completion of each step,
+// then passes the result of the previous step as the input to the next step.
+function _uploadFilesContinue(outputId) {
+  const outputElement = document.getElementById(outputId);
+  const steps = outputElement.steps;
+
+  const next = steps.next(outputElement.lastPromiseValue);
+  return Promise.resolve(next.value.promise).then((value) => {
+    // Cache the last promise value to make it available to the next
+    // step of the generator.
+    outputElement.lastPromiseValue = value;
+    return next.value.response;
+  });
+}
+
+/**
+ * Generator function which is called between each async step of the upload
+ * process.
+ * @param {string} inputId Element ID of the input file picker element.
+ * @param {string} outputId Element ID of the output display.
+ * @return {!Iterable<!Object>} Iterable of next steps.
+ */
+function* uploadFilesStep(inputId, outputId) {
+  const inputElement = document.getElementById(inputId);
+  inputElement.disabled = false;
+
+  const outputElement = document.getElementById(outputId);
+  outputElement.innerHTML = '';
+
+  const pickedPromise = new Promise((resolve) => {
+    inputElement.addEventListener('change', (e) => {
+      resolve(e.target.files);
+    });
+  });
+
+  const cancel = document.createElement('button');
+  inputElement.parentElement.appendChild(cancel);
+  cancel.textContent = 'Cancel upload';
+  const cancelPromise = new Promise((resolve) => {
+    cancel.onclick = () => {
+      resolve(null);
+    };
+  });
+
+  // Wait for the user to pick the files.
+  const files = yield {
+    promise: Promise.race([pickedPromise, cancelPromise]),
+    response: {
+      action: 'starting',
+    }
+  };
+
+  cancel.remove();
+
+  // Disable the input element since further picks are not allowed.
+  inputElement.disabled = true;
+
+  if (!files) {
+    return {
+      response: {
+        action: 'complete',
+      }
+    };
+  }
+
+  for (const file of files) {
+    const li = document.createElement('li');
+    li.append(span(file.name, {fontWeight: 'bold'}));
+    li.append(span(
+        `(${file.type || 'n/a'}) - ${file.size} bytes, ` +
+        `last modified: ${
+            file.lastModifiedDate ? file.lastModifiedDate.toLocaleDateString() :
+                                    'n/a'} - `));
+    const percent = span('0% done');
+    li.appendChild(percent);
+
+    outputElement.appendChild(li);
+
+    const fileDataPromise = new Promise((resolve) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        resolve(e.target.result);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+    // Wait for the data to be ready.
+    let fileData = yield {
+      promise: fileDataPromise,
+      response: {
+        action: 'continue',
+      }
+    };
+
+    // Use a chunked sending to avoid message size limits. See b/62115660.
+    let position = 0;
+    do {
+      const length = Math.min(fileData.byteLength - position, MAX_PAYLOAD_SIZE);
+      const chunk = new Uint8Array(fileData, position, length);
+      position += length;
+
+      const base64 = btoa(String.fromCharCode.apply(null, chunk));
+      yield {
+        response: {
+          action: 'append',
+          file: file.name,
+          data: base64,
+        },
+      };
+
+      let percentDone = fileData.byteLength === 0 ?
+          100 :
+          Math.round((position / fileData.byteLength) * 100);
+      percent.textContent = `${percentDone}% done`;
+
+    } while (position < fileData.byteLength);
+  }
+
+  // All done.
+  yield {
+    response: {
+      action: 'complete',
+    }
+  };
+}
+
+scope.google = scope.google || {};
+scope.google.colab = scope.google.colab || {};
+scope.google.colab._files = {
+  _uploadFiles,
+  _uploadFilesContinue,
+};
+})(self);
+</script> <p>Saving shop_data.xlsx to shop_data.xlsx<br>Creating table 'excel_upload_test' with primary key...<br>Table 'excel_upload_test' created successfully.<br>Uploading data to table 'excel_upload_test'...<br>Data uploaded successfully.<br>------------------------------<br>✅ 上傳成功！<br>資料已存入資料庫：defaultdb<br>資料表名稱為：excel_upload_test<br><br>以下是資料庫內的前 5 筆資料預覽：<br>   id     order_id customer_id customer_segment product_id product_name  \<br>0   1  ORD20240001       C1072          Regular       P114        Boots   <br>1   2  ORD20240002       C1085          Regular       P108        Socks   <br>2   3  ORD20240003       C1070        Returning       P106     Backpack   <br>3   4  ORD20240004       C1040              VIP       P111        Scarf   <br>4   5  ORD20240005       C1084          Regular       P104          Hat   <br><br>      category  sub_category              supplier  unit_price  ...  \<br>0     Footwear  Winter Shoes       StepOne Trading       96.20  ...   <br>1     Footwear         Socks       StepOne Trading        6.25  ...   <br>2  Accessories          Bags  Urban Accessory Ltd.       42.35  ...   <br>3  Accessories      Neckwear  Urban Accessory Ltd.       15.63  ...   <br>4  Accessories      Headwear  Urban Accessory Ltd.       15.67  ...   <br><br>        city     campaign  sale_date    month customer_rating returned  \<br>0     Chiayi  No Campaign 2025-01-21  2025-01               5       No   <br>1    Taoyuan   Flash Sale 2025-03-02  2025-03               5       No   <br>2  Kaohsiung  No Campaign 2025-01-02  2025-01               3       No   <br>3   Taichung   Flash Sale 2025-02-21  2025-02               5       No   <br>4  Kaohsiung  No Campaign 2024-12-20  2024-12               4       No   <br><br>  gross_sales discount_amount net_sales gross_profit  <br>0      192.40          0.0000   312.400     213.4200  <br>1       12.50          2.7500    89.750      83.1700  <br>2      127.05          0.0000   187.050     136.6500  <br>3       62.52         13.7544   108.766      81.8856  <br>4       31.34          0.9402   130.400     117.8000  <br><br>[5 rows x 26 columns]<br></p></div></div><div class="section"><h3>Python 程式碼範例</h3><div class="code-block">import pandas as pd
+from sqlalchemy import create_engine
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+# 1. 建立連線 (請換成你的密碼)
+USER = 'avnadmin'
+PASSWORD = 'AVNS_Ggqii1pHOaZqTR0hJjC'
+HOST = 'mysql-23f76110-me-1dbd.d.aivencloud.com'
+PORT = '23367'
+DB_NAME = 'defaultdb' # 或 shop_data，視你上傳的位置而定
+
+connection_uri = f"mysql+pymysql://{USER}:{PASSWORD}@{HOST}:{PORT}/{DB_NAME}?ssl_verify_cert=false"
+engine = create_engine(connection_uri)
+
+# 2. 抓取資料庫內的資料
+# 假設你的資料表名稱是 excel_upload_test
+query = "SELECT * FROM excel_upload_test"
+df = pd.read_sql(query, engine)
+
+# 設定中文字體 (Colab 環境)
+plt.rcParams['font.sans-serif'] = ['Liberation Sans']
+plt.rcParams['axes.unicode_minus'] = False
+
+# --- 開始繪圖 ---
+
+# 建立一個大畫布，容納多個圖表
+plt.figure(figsize=(15, 10))
+
+# 圖表 1：長條圖 (Bar Chart) - 範例：不同產品類別的數量
+plt.subplot(2, 2, 1)
+# 假設你的 Excel 裡有一欄叫 'category' (請根據你的欄位名稱修改)
+# 如果不知道欄位名，可以先用 sns.countplot(data=df.iloc[:, 1:2]) 測試
+sns.countplot(x=df.columns[2], data=df)
+plt.title('Product Category Count')
+plt.xticks(rotation=45)
+
+# 圖表 2：折線圖 (Line Chart) - 範例：銷售金額趨勢
+plt.subplot(2, 2, 2)
+# 假設你有 'date' 和 'net_sales' 欄位
+# sns.lineplot(x='date', y='net_sales', data=df)
+plt.plot(df.index, df['net_sales'] if 'net_sales' in df.columns else df.iloc[:, -1])
+plt.title('Sales Trend')
+
+# 圖表 3：散佈圖 (Scatter Plot) - 範例：折扣與銷售額的關係
+plt.subplot(2, 2, 3)
+if 'discount_amount' in df.columns and 'net_sales' in df.columns:
+    sns.scatterplot(x='discount_amount', y='net_sales', data=df)
+    plt.title('Discount vs Sales')
+
+# 圖表 4：圓餅圖 (Pie Chart) - 範例：客戶比例
+plt.subplot(2, 2, 4)
+df.iloc[:, 3].value_counts().plot.pie(autopct='%1.1f%%')
+plt.title('Segment Distribution')
+
+plt.tight_layout()
+plt.show()</div><div class="output-block"><h4>執行結果/輸出預覽</h4></div></div><div class="section"><h3>Python 程式碼範例</h3><div class="code-block">print("連線主機位址:", HOST)</div><div class="output-block"><h4>執行結果/輸出預覽</h4><p>連線主機位址: mysql-23f76110-me-1dbd.d.aivencloud.com<br></p></div></div><div class="section"><h3>Python 程式碼範例</h3><div class="code-block">print(f"1. 資料庫連線狀態: 成功連線至 {DB_NAME}")
+print(f"2. 連線主機(IP/Host): {HOST}")
+print(f"3. 連線資訊確認: 已透過 SQLAlchemy 正確連線")
+print(f"4. 資料抓取測試: 成功抓取 {len(df)} 筆資料")
+print("-" * 25)
+# 顯示資料前 3 筆
+display(df.head(3))</div><div class="output-block"><h4>執行結果/輸出預覽</h4><p>1. 資料庫連線狀態: 成功連線至 defaultdb<br>2. 連線主機(IP/Host): mysql-23f76110-me-1dbd.d.aivencloud.com<br>3. 連線資訊確認: 已透過 SQLAlchemy 正確連線<br>4. 資料抓取測試: 成功抓取 220 筆資料<br>-------------------------<br></p>
+  <div id="df-3fdcd779-b591-4735-b153-f1e50331c42f" class="colab-df-container">
+    <div>
+<style scoped>
+    .dataframe tbody tr th:only-of-type {
+        vertical-align: middle;
+    }
+
+    .dataframe tbody tr th {
+        vertical-align: top;
+    }
+
+    .dataframe thead th {
+        text-align: right;
+    }
+</style>
+<table border="1" class="dataframe">
+  <thead>
+    <tr style="text-align: right;">
+      <th></th>
+      <th>id</th>
+      <th>order_id</th>
+      <th>customer_id</th>
+      <th>customer_segment</th>
+      <th>product_id</th>
+      <th>product_name</th>
+      <th>category</th>
+      <th>sub_category</th>
+      <th>supplier</th>
+      <th>unit_price</th>
+      <th>...</th>
+      <th>city</th>
+      <th>campaign</th>
+      <th>sale_date</th>
+      <th>month</th>
+      <th>customer_rating</th>
+      <th>returned</th>
+      <th>gross_sales</th>
+      <th>discount_amount</th>
+      <th>net_sales</th>
+      <th>gross_profit</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th>0</th>
+      <td>1</td>
+      <td>ORD20240001</td>
+      <td>C1072</td>
+      <td>Regular</td>
+      <td>P114</td>
+      <td>Boots</td>
+      <td>Footwear</td>
+      <td>Winter Shoes</td>
+      <td>StepOne Trading</td>
+      <td>96.20</td>
+      <td>...</td>
+      <td>Chiayi</td>
+      <td>No Campaign</td>
+      <td>2025-01-21</td>
+      <td>2025-01</td>
+      <td>5</td>
+      <td>No</td>
+      <td>192.40</td>
+      <td>0.00</td>
+      <td>312.40</td>
+      <td>213.42</td>
+    </tr>
+    <tr>
+      <th>1</th>
+      <td>2</td>
+      <td>ORD20240002</td>
+      <td>C1085</td>
+      <td>Regular</td>
+      <td>P108</td>
+      <td>Socks</td>
+      <td>Footwear</td>
+      <td>Socks</td>
+      <td>StepOne Trading</td>
+      <td>6.25</td>
+      <td>...</td>
+      <td>Taoyuan</td>
+      <td>Flash Sale</td>
+      <td>2025-03-02</td>
+      <td>2025-03</td>
+      <td>5</td>
+      <td>No</td>
+      <td>12.50</td>
+      <td>2.75</td>
+      <td>89.75</td>
+      <td>83.17</td>
+    </tr>
+    <tr>
+      <th>2</th>
+      <td>3</td>
+      <td>ORD20240003</td>
+      <td>C1070</td>
+      <td>Returning</td>
+      <td>P106</td>
+      <td>Backpack</td>
+      <td>Accessories</td>
+      <td>Bags</td>
+      <td>Urban Accessory Ltd.</td>
+      <td>42.35</td>
+      <td>...</td>
+      <td>Kaohsiung</td>
+      <td>No Campaign</td>
+      <td>2025-01-02</td>
+      <td>2025-01</td>
+      <td>3</td>
+      <td>No</td>
+      <td>127.05</td>
+      <td>0.00</td>
+      <td>187.05</td>
+      <td>136.65</td>
+    </tr>
+  </tbody>
+</table>
+<p>3 rows × 26 columns</p>
+</div>
+    <div class="colab-df-buttons">
+
+  <div class="colab-df-container">
+    <button class="colab-df-convert" onclick="convertToInteractive('df-3fdcd779-b591-4735-b153-f1e50331c42f')"
+            title="Convert this dataframe to an interactive table."
+            style="display:none;">
+
+  <svg xmlns="http://www.w3.org/2000/svg" height="24px" viewBox="0 -960 960 960">
+    <path d="M120-120v-720h720v720H120Zm60-500h600v-160H180v160Zm220 220h160v-160H400v160Zm0 220h160v-160H400v160ZM180-400h160v-160H180v160Zm440 0h160v-160H620v160ZM180-180h160v-160H180v160Zm440 0h160v-160H620v160Z"/>
+  </svg>
+    </button>
+
+  <style>
+    .colab-df-container {
+      display:flex;
+      gap: 12px;
+    }
+
+    .colab-df-convert {
+      background-color: #E8F0FE;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      display: none;
+      fill: #1967D2;
+      height: 32px;
+      padding: 0 0 0 0;
+      width: 32px;
+    }
+
+    .colab-df-convert:hover {
+      background-color: #E2EBFA;
+      box-shadow: 0px 1px 2px rgba(60, 64, 67, 0.3), 0px 1px 3px 1px rgba(60, 64, 67, 0.15);
+      fill: #174EA6;
+    }
+
+    .colab-df-buttons div {
+      margin-bottom: 4px;
+    }
+
+    [theme=dark] .colab-df-convert {
+      background-color: #3B4455;
+      fill: #D2E3FC;
+    }
+
+    [theme=dark] .colab-df-convert:hover {
+      background-color: #434B5C;
+      box-shadow: 0px 1px 3px 1px rgba(0, 0, 0, 0.15);
+      filter: drop-shadow(0px 1px 2px rgba(0, 0, 0, 0.3));
+      fill: #FFFFFF;
+    }
+  </style>
+
+    <script>
+      const buttonEl =
+        document.querySelector('#df-3fdcd779-b591-4735-b153-f1e50331c42f button.colab-df-convert');
+      buttonEl.style.display =
+        google.colab.kernel.accessAllowed ? 'block' : 'none';
+
+      async function convertToInteractive(key) {
+        const element = document.querySelector('#df-3fdcd779-b591-4735-b153-f1e50331c42f');
+        const dataTable =
+          await google.colab.kernel.invokeFunction('convertToInteractive',
+                                                    [key], {});
+        if (!dataTable) return;
+
+        const docLinkHtml = 'Like what you see? Visit the ' +
+          '<a target="_blank" href=https://colab.research.google.com/notebooks/data_table.ipynb>data table notebook</a>'
+          + ' to learn more about interactive tables.';
+        element.innerHTML = '';
+        dataTable['output_type'] = 'display_data';
+        await google.colab.output.renderOutput(dataTable, element);
+        const docLink = document.createElement('div');
+        docLink.innerHTML = docLinkHtml;
+        element.appendChild(docLink);
+      }
+    </script>
+  </div>
+
+
+    </div>
+  </div>
+</div></div>
+    </div>
+</body>
+</html>
